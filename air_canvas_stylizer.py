@@ -334,7 +334,7 @@ def overlay_paint_on_canvas(canvas, paint):
 def draw_enhanced_toolbar(frame, brush_color, brush_size, erasing, mode, last_saved):
     """Draw an enhanced toolbar with better visuals"""
     h, w = frame.shape[:2]
-    toolbar_height = 100
+    toolbar_height = 150
     
     # Create toolbar background with gradient
     toolbar = np.zeros((toolbar_height, w, 3), dtype=np.uint8)
@@ -342,15 +342,39 @@ def draw_enhanced_toolbar(frame, brush_color, brush_size, erasing, mode, last_sa
         intensity = int(60 - (i * 30 / toolbar_height))
         toolbar[i, :] = [intensity, intensity, intensity]
     
-    # Color palette
-    colors = [
-        ((20, 20), (70, 70), (0, 0, 255), "RED", "1"),      # Red
-        ((80, 20), (130, 70), (0, 255, 0), "GREEN", "2"),   # Green
-        ((140, 20), (190, 70), (255, 0, 0), "BLUE", "3"),   # Blue
-        ((200, 20), (250, 70), (0, 255, 255), "YELLOW", "4"), # Yellow
-        ((260, 20), (310, 70), (255, 255, 255), "WHITE", "5"), # White
-        ((320, 20), (370, 70), (128, 0, 128), "PURPLE", "6"), # Purple
+    # Define palette (color, name, key)
+    palette = [
+        ((0,0,255), "Red", "1"),
+        ((0,255,0), "Green", "2"),
+        ((255,0,0), "Blue", "3"),
+        ((0,255,255), "Yellow", "4"),
+        ((255,0,255), "Pink", "5"),
+        ((255,165,0), "Orange", "6"),
+        ((128,0,128), "Purple", "7"),
+        ((0,255,255), "Cyan", "8"),
+        ((42,42,165), "Brown", "9"),
+        ((0,0,0), "Black", "0"),
+        ((255,255,255), "Eraser", "E")
     ]
+
+    # Build button rectangles dynamically
+    button_width, button_height = 50, 50
+    x_offset, y_offset = 10, 20
+    # Build button rectangles dynamically (2 rows)
+    colors = []
+    button_width, button_height = 50, 50
+    x_offset, y_offset = 10, 20
+    buttons_per_row = 5  # 5 colors per row
+
+    for i, (color, name, key) in enumerate(palette):
+        row = i // buttons_per_row
+        col = i % buttons_per_row
+        x1 = x_offset + col * (button_width + 10)
+        y1 = y_offset + row * (button_height + 10)
+        x2 = x1 + button_width
+        y2 = y1 + button_height
+        colors.append(((x1, y1), (x2, y2), color, name, key))
+
     
     # Draw color buttons
     for (pt1, pt2, color, name, key) in colors:
@@ -358,37 +382,39 @@ def draw_enhanced_toolbar(frame, brush_color, brush_size, erasing, mode, last_sa
         thickness = -1 if selected else 3
         cv2.rectangle(toolbar, pt1, pt2, color, thickness)
         if not selected:
-            cv2.rectangle(toolbar, pt1, pt2, (200, 200, 200), 2)
+            cv2.rectangle(toolbar, pt1, pt2, (200,200,200), 2)
         
         # Add key label
-        text_color = (0, 0, 0) if sum(color) > 400 else (255, 255, 255)
-        cv2.putText(toolbar, key, (pt1[0] + 15, pt2[1] - 10), 
+        text_color = (0,0,0) if sum(color) > 400 else (255,255,255)
+        cv2.putText(toolbar, key, (pt1[0]+12, pt2[1]-10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
     
     # Eraser button
     eraser_rect = ((380, 20), (450, 70))
-    eraser_color = (255, 100, 100) if erasing else (150, 150, 150)
+    eraser_color = (255,100,100) if erasing else (150,150,150)
     cv2.rectangle(toolbar, eraser_rect[0], eraser_rect[1], eraser_color, -1 if erasing else 3)
-    cv2.rectangle(toolbar, eraser_rect[0], eraser_rect[1], (200, 200, 200), 2)
-    cv2.putText(toolbar, "ERASE", (385, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+    cv2.rectangle(toolbar, eraser_rect[0], eraser_rect[1], (200,200,200), 2)
+    cv2.putText(toolbar, "ERASE", (385, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 2)
     
     # AI Button
-    ai_rect = ((460, 20), (520, 70))
-    ai_color = (100, 255, 100)
+    ai_rect = ((460,20),(520,70))
+    ai_color = (100,255,100)
     cv2.rectangle(toolbar, ai_rect[0], ai_rect[1], ai_color, 3)
-    cv2.rectangle(toolbar, ai_rect[0], ai_rect[1], (200, 200, 200), 2)
-    cv2.putText(toolbar, "AI", (475, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    cv2.rectangle(toolbar, ai_rect[0], ai_rect[1], (200,200,200), 2)
+    cv2.putText(toolbar, "AI", (475, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,0), 2)
     
     # Info panel
     info_x = 530
-    cv2.putText(toolbar, f"Brush: {brush_size}px", (info_x, 30), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-    cv2.putText(toolbar, f"Mode: {mode.upper()}", (info_x, 50), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-    cv2.putText(toolbar, f"Saved: {'Yes' if last_saved else 'No'}", (info_x, 70), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0) if last_saved else (255, 100, 100), 2)
+    cv2.putText(toolbar, f"Brush: {brush_size}px", (info_x, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+    cv2.putText(toolbar, f"Mode: {mode.upper()}", (info_x, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+    cv2.putText(toolbar, f"Saved: {'Yes' if last_saved else 'No'}", (info_x, 70),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                (0,255,0) if last_saved else (255,100,100), 2)
     
     return toolbar, colors, eraser_rect, ai_rect
+
 
 
 def draw_help_panel(frame):
@@ -409,6 +435,8 @@ def draw_help_panel(frame):
         "[ ] - Brush size",
         "e - Toggle eraser",
         "q - Quit"
+        "f - shape"
+        
     ]
     
     h, w = frame.shape[:2]
@@ -559,12 +587,49 @@ class ColorTracker:
 # ----------------------------
 # 🎯 Main Application
 # ----------------------------
+def draw_shape_overlay(canvas, shape="circle", alpha=0.3):
+    """Overlay a transparent shape as a tracing guide."""
+    overlay = canvas.copy()
+    h, w = canvas.shape[:2]
+    center = (w // 2, h // 2 + 50)  # keep below toolbar
+    size = min(h, w) // 4
+
+    color = (200, 200, 200)  # light gray
+
+    if shape == "circle":
+        cv2.circle(overlay, center, size, color, thickness=3)
+
+    elif shape == "square":
+        top_left = (center[0] - size, center[1] - size)
+        bottom_right = (center[0] + size, center[1] + size)
+        cv2.rectangle(overlay, top_left, bottom_right, color, thickness=3)
+
+    elif shape == "triangle":
+        pts = np.array([
+            [center[0], center[1] - size],
+            [center[0] - size, center[1] + size],
+            [center[0] + size, center[1] + size]
+        ], np.int32)
+        pts = pts.reshape((-1, 1, 2))
+        cv2.polylines(overlay, [pts], isClosed=True, color=color, thickness=3)
+
+    elif shape == "line":
+        cv2.line(overlay, (center[0] - size, center[1]),
+                 (center[0] + size, center[1]), color, thickness=3)
+
+    # Blend overlay with transparency
+    return cv2.addWeighted(overlay, alpha, canvas, 1 - alpha, 0)
 
 
 def main():
     print("🎨 Starting Enhanced Virtual Painter with AI...")
     print("📹 Initializing camera...")
-    
+    shapes = ["circle", "square", "triangle", "line"]
+    current_shape_idx = 0
+    current_mode = "canvas"   # start in free-draw mode
+    show_shape = False
+    brush_size = 5            # default brush size
+
     # Initialize camera
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -658,7 +723,9 @@ def main():
         # Add toolbar
         toolbar, color_buttons, eraser_rect, ai_rect = draw_enhanced_toolbar(
             output_frame, brush_color, brush_size, erasing, mode, last_saved_path)
-        output_frame[:100] = toolbar
+        toolbar_height = toolbar.shape[0]
+        output_frame[:toolbar_height] = toolbar
+
         
         # Add camera preview (small)
         preview_size = (200, 150)
@@ -672,6 +739,8 @@ def main():
         # Add this after the drawing logic and before cv2.imshow
 # Draw pointer on canvas
         draw_canvas_pointer(output_frame, current_point, brush_size, brush_color, is_drawing)
+        if show_shape:
+            output_frame = draw_shape_overlay(output_frame, shapes[current_shape_idx], alpha=0.4)
 
 
         # Display
@@ -725,17 +794,42 @@ def main():
             brush_size = max(2, brush_size - 2)    # decrease brush size
             print("🔻 Brush size:", brush_size)
 
-            
+        elif key == ord('n'):  # Next shape
+            current_shape_idx = (current_shape_idx + 1) % len(shapes)
+            print(f"✏ Shape: {shapes[current_shape_idx]}")
+
+        elif key == ord('f'):  # Toggle shape ON/OFF
+            if current_mode == "canvas":
+                current_mode = shapes[current_shape_idx]  # enter shape mode
+                show_shape = True
+                print(f"👁 Shape Mode: {current_mode}")
+            else:
+                current_mode = "canvas"  # return to free drawing
+                show_shape = False
+                print("🙈 Back to Canvas")
+
+        elif key == 27:  # ESC → always return to canvas
+            current_mode = "canvas"
+            show_shape = False
+            print("🔙 Reset to Canvas")
+
+
+
         elif key in [ord('1'), ord('2'), ord('3'), ord('4'), ord('5'), ord('6')]:
             # Color selection
             color_map = {
-                ord('1'): (0, 0, 255),      # Red
-                ord('2'): (0, 255, 0),      # Green  
-                ord('3'): (255, 0, 0),      # Blue
-                ord('4'): (0, 255, 255),    # Yellow
-                ord('5'): (255, 255, 255),  # White
-                ord('6'): (128, 0, 128),    # Purple
+                ord('1'): (0, 0, 255),       # Red
+                ord('2'): (0, 255, 0),       # Green  
+                ord('3'): (255, 0, 0),       # Blue
+                ord('4'): (0, 255, 255),     # Yellow
+                ord('5'): (255, 255, 255),   # White (Eraser)
+                ord('6'): (128, 0, 128),     # Purple
+                ord('7'): (255, 165, 0),     # Orange
+                ord('8'): (0, 255, 255),     # Cyan
+                ord('9'): (139, 69, 19),     # Brown
+                ord('0'): (0, 0, 0),         # Black
             }
+
             brush_color = color_map[key]
             erasing = False
         
