@@ -12,6 +12,18 @@ import requests
 import base64
 import json
 
+# Quick diagnostic: ensure the imported cv2 provides VideoCapture (helps surface installer or shadowing problems)
+try:
+    _has_vc = hasattr(cv2, 'VideoCapture')
+except Exception:
+    _has_vc = False
+if not _has_vc:
+    import sys
+    print(f"ERROR: cv2 module loaded from {getattr(cv2, '__file__', None)} does not provide 'VideoCapture'.")
+    print(f"Run this script with the Python interpreter you installed OpenCV into (sys.executable={sys.executable}), and make sure 'opencv-python' is installed.")
+    print("Also ensure there is no local file named 'cv2.py' or a folder named 'cv2' that would shadow the real package.")
+    raise ImportError("cv2 missing VideoCapture - install 'opencv-python' or fix import shadowing")
+
 # Try importing mediapipe for hand tracking
 try:
     import mediapipe as mp
@@ -294,6 +306,27 @@ def watercolor_effect(img):
 # ----------------------------
 # Drawing utilities
 # ----------------------------
+# ----------------- CUSTOM BRUSHES -----------------
+def square_brush(canvas, pt1, pt2, color, size):
+    x1,y1 = pt1; x2,y2 = pt2
+    steps = int(max(abs(x2-x1), abs(y2-y1))/size)+1
+    for i in range(steps):
+        x = int(x1 + (x2-x1)*i/steps)
+        y = int(y1 + (y2-y1)*i/steps)
+        cv2.rectangle(canvas, (x-size//2,y-size//2), (x+size//2,y+size//2), color, -1)
+
+def spray_brush(canvas, point, color, size):
+    x0,y0 = point
+    for _ in range(size*3):  # more = denser
+        x = x0 + random.randint(-size, size)
+        y = y0 + random.randint(-size, size)
+        if 0<=x<canvas.shape[1] and 0<=y<canvas.shape[0]:
+            canvas[y,x] = color
+
+def calligraphy_brush(canvas, point, color, size, angle=45):
+    axes = (size, size//3)
+    cv2.ellipse(canvas, point, axes, angle, 0, 360, color, -1)
+# ---------------------------------------------------
 
 def smooth_brush_stroke(paint, pt1, pt2, color, size, erasing=False):
     """Draw smooth brush strokes between two points"""
@@ -418,45 +451,43 @@ def draw_enhanced_toolbar(frame, brush_color, brush_size, erasing, mode, last_sa
 
 
 def draw_help_panel(frame):
-    """Draw help instructions"""
     help_text = [
-        "🎨 VIRTUAL PAINTER CONTROLS:",
-        "s - Save drawing",
-        "r - Reset canvas", 
-        "c - Cartoonify",
-        "p - Pencil sketch",
-        "o - Oil painting",
-        "k - Pop art style",
-        "w - Watercolor",
-        "a - AI Cartoon Generation",
-        "v - Character Variations",
-        "g - Gallery view",
-        "m - Switch mode",
-        "[ ] - Brush size",
-        "e - Toggle eraser",
-        "q - Quit"
-        "f - shape"
+        "🎨 VIRTUAL PAINTER CONTROLS",
+        "s  - Save       r  - Reset",
+        "c  - Cartoonify  p  - Pencil",
+        "o  - Oil paint   k  - Pop art",
+        "w  - Watercolor  a  - AI Cartoon",
+        "v  - Character   g  - Gallery",
+        "m  - Switch mode  [ ] - Brush size",
+        "e  - Eraser      q  - Quit",
+        "f  - Shapes",
+        "",
+        "Pointers (Accessibility):",
+        "- Finger",
+        "- Nose",
+        "- Elbow",
+        "- Head-mounted pointer",
+        "- Eye-tracking pointer"
         
     ]
     
     h, w = frame.shape[:2]
-    panel_width = 280
+    panel_width = 350
     panel_height = len(help_text) * 25 + 20
     
-    # Create semi-transparent panel
     overlay = frame.copy()
     cv2.rectangle(overlay, (w - panel_width - 10, 10), 
-                 (w - 10, panel_height + 10), (0, 0, 0), -1)
+                  (w - 10, panel_height + 10), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
     
-    # Add text
     for i, text in enumerate(help_text):
         y_pos = 35 + i * 25
         color = (0, 255, 255) if i == 0 else (255, 255, 255)
         font_scale = 0.6 if i == 0 else 0.5
         thickness = 2 if i == 0 else 1
-        cv2.putText(frame, text, (w - panel_width, y_pos), 
-                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
+        cv2.putText(frame, text, (w - panel_width + 10, y_pos), 
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
+
 
 def handle_toolbar_click(x, y, colors, eraser_rect, ai_rect):
     """Handle toolbar button clicks"""
@@ -594,7 +625,7 @@ def draw_shape_overlay(canvas, shape="circle", alpha=0.3):
     center = (w // 2, h // 2 + 50)  # keep below toolbar
     size = min(h, w) // 4
 
-    color = (200, 200, 200)  # light gray
+    color = (0, 0, 0)  # black (overlay will be blended by alpha)
 
     if shape == "circle":
         cv2.circle(overlay, center, size, color, thickness=3)
@@ -619,6 +650,63 @@ def draw_shape_overlay(canvas, shape="circle", alpha=0.3):
 
     # Blend overlay with transparency
     return cv2.addWeighted(overlay, alpha, canvas, 1 - alpha, 0)
+
+
+def stamp_shape(canvas, shape, center, size, color, erasing=False, thickness=-1):
+    """Stamp a shape onto the canvas at center with given size and color.
+    thickness=-1 fills the shape; set to >0 for outline.
+    """
+    # Use black fill/outline for shapes; when not erasing, use semi-transparent black for filled shapes
+    black = (0, 0, 0)
+    if thickness < 0 and not erasing:
+        # Draw a gray fill that represents semi-transparent black over a white background.
+        # For alpha blending of black over white: result = (1-alpha)*255 -> fill_value
+        alpha = 0.6
+        fill_value = int(255 * (1 - alpha))
+        fill_color = (fill_value, fill_value, fill_value)
+        if shape == "circle":
+            cv2.circle(canvas, center, size, fill_color, -1)
+        elif shape == "square":
+            top_left = (center[0] - size, center[1] - size)
+            bottom_right = (center[0] + size, center[1] + size)
+            cv2.rectangle(canvas, top_left, bottom_right, fill_color, -1)
+        elif shape == "triangle":
+            pts = np.array([
+                [center[0], center[1] - size],
+                [center[0] - size, center[1] + size],
+                [center[0] + size, center[1] + size]
+            ], np.int32)
+            cv2.fillPoly(canvas, [pts], fill_color)
+        elif shape == "line":
+            pt1 = (center[0] - size, center[1])
+            pt2 = (center[0] + size, center[1])
+            cv2.line(canvas, pt1, pt2, fill_color, max(2, int(size*0.1)))
+    else:
+        # Solid outline or erasing behavior
+        draw_color = black if not erasing else (255, 255, 255)
+        if shape == "circle":
+            cv2.circle(canvas, center, size, draw_color, thickness)
+        elif shape == "square":
+            top_left = (center[0] - size, center[1] - size)
+            bottom_right = (center[0] + size, center[1] + size)
+            if thickness < 0:
+                cv2.rectangle(canvas, top_left, bottom_right, draw_color, -1)
+            else:
+                cv2.rectangle(canvas, top_left, bottom_right, draw_color, thickness)
+        elif shape == "triangle":
+            pts = np.array([
+                [center[0], center[1] - size],
+                [center[0] - size, center[1] + size],
+                [center[0] + size, center[1] + size]
+            ], np.int32)
+            if thickness < 0:
+                cv2.fillPoly(canvas, [pts], draw_color)
+            else:
+                cv2.polylines(canvas, [pts], isClosed=True, color=draw_color, thickness=thickness)
+        elif shape == "line":
+            pt1 = (center[0] - size, center[1])
+            pt2 = (center[0] + size, center[1])
+            cv2.line(canvas, pt1, pt2, draw_color, max(2, thickness if thickness>0 else 2))
 
 
 def main():
@@ -651,7 +739,8 @@ def main():
     brush_color = (0, 0, 255)  # Red
     brush_size = 8
     erasing = False
-    
+    brush_type = "round"  # default brush
+
     # Tracking
     mode = 'hand' if MP_AVAILABLE else 'color'
     hand_tracker = HandTracker() if MP_AVAILABLE else None
@@ -704,16 +793,28 @@ def main():
         # Handle drawing
         if current_point and is_drawing:
             x, y = current_point
-            
+
             # Check for toolbar interaction
             if y <= 100:  # In toolbar area
                 prev_point = None
             else:
-                # Draw on canvas
-                if prev_point and prev_point[1] > 100:  # Previous point also in drawing area
-                    smooth_brush_stroke(paint_canvas, prev_point, current_point, 
-                                      brush_color, brush_size, erasing)
-                prev_point = current_point
+                # If we're in normal canvas mode, draw freehand strokes
+                if current_mode == "canvas":
+                    if prev_point and prev_point[1] > 100:  # Previous point also in drawing area
+                        smooth_brush_stroke(paint_canvas, prev_point, current_point,
+                                            brush_color, brush_size, erasing)
+                    prev_point = current_point
+                else:
+                    # Shape mode: stamp the selected shape onto the paint canvas once when drawing begins
+                    # Use the same center logic as draw_shape_overlay
+                    center = (w // 2, h // 2 + 50)
+                    size = min(h, w) // 4
+
+                    # Only stamp shape once per drawing gesture
+                    if prev_point is None:
+                        # Use helper to stamp; filled shapes will be semi-transparent black
+                        stamp_shape(paint_canvas, current_mode, center, size, brush_color, erasing)
+                        prev_point = current_point
         else:
             prev_point = None
         
@@ -807,6 +908,19 @@ def main():
                 current_mode = "canvas"  # return to free drawing
                 show_shape = False
                 print("🙈 Back to Canvas")
+
+        # Stamp shape manually with SPACE when shape overlay is visible
+        elif key == ord(' '):
+            if show_shape:
+                # Prefer stamping at current pointer if available and in drawing area
+                if current_point and current_point[1] > 100:
+                    center_pt = current_point
+                else:
+                    center_pt = (w // 2, h // 2 + 50)
+
+                size = min(h, w) // 4
+                stamp_shape(paint_canvas, shapes[current_shape_idx], center_pt, size, brush_color, erasing)
+                print(f"🖼 Stamped shape: {shapes[current_shape_idx]} at {center_pt}")
 
         elif key == 27:  # ESC → always return to canvas
             current_mode = "canvas"
