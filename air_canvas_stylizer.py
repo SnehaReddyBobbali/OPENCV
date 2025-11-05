@@ -549,12 +549,13 @@ def draw_canvas_pointer(frame, position, brush_size, brush_color, is_drawing=Fal
 
 
 class HandTracker:
-    """Hand tracking using MediaPipe"""
-    def __init__(self, max_hands=1, detection_confidence=0.7, tracking_confidence=0.7):
+    """Hand tracking using MediaPipe with improved gesture detection"""
+    def __init__(self, max_hands=2, detection_confidence=0.7, tracking_confidence=0.7):
         if not MP_AVAILABLE:
             raise ImportError("MediaPipe not available")
         
         self.mp_hands = mp.solutions.hands
+        self.mp_drawing = mp.solutions.drawing_utils
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=max_hands,
@@ -562,33 +563,68 @@ class HandTracker:
             min_tracking_confidence=tracking_confidence
         )
     
-    def get_finger_position(self, frame):
-        """Get index finger position and drawing state"""
+    def get_finger_positions(self, frame):
+        """Get index finger positions and drawing state for up to max_hands.
+        Returns list of tuples: (x, y, is_drawing) for each detected hand (ordered by detection).
+        Drawing is active when index finger is up and middle finger is down.
+        """
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb_frame)
-        
+
         if not results.multi_hand_landmarks:
-            return None
-        
+            return []
+
         h, w = frame.shape[:2]
-        hand_landmarks = results.multi_hand_landmarks[0]
+        positions = []
         
-        # Get landmark positions
-        landmarks = []
-        for lm in hand_landmarks.landmark:
-            landmarks.append([int(lm.x * w), int(lm.y * h)])
-        
-        # Index finger tip (landmark 8)
-        index_tip = landmarks[8]
-        
-        # Check if index finger is up and middle finger is down
-        index_up = landmarks[8][1] < landmarks[6][1]  # Index tip above index PIP
-        middle_up = landmarks[12][1] < landmarks[10][1]  # Middle tip above middle PIP
-        
-        # Drawing when index up and middle down
-        is_drawing = index_up and not middle_up
-        
-        return (index_tip[0], index_tip[1], is_drawing)
+        for hand_landmarks in results.multi_hand_landmarks:
+            # Get landmark positions
+            landmarks = []
+            for lm in hand_landmarks.landmark:
+                landmarks.append([int(lm.x * w), int(lm.y * h)])
+
+            # Index finger tip (landmark 8) and base joints
+            index_tip = landmarks[8]      # Fingertip
+            index_pip = landmarks[6]      # Middle joint
+            index_mcp = landmarks[5]      # Base joint
+            
+            # Middle finger landmarks
+            middle_tip = landmarks[12]
+            middle_pip = landmarks[10]
+            middle_mcp = landmarks[9]
+            
+            # Wrist for reference
+            wrist = landmarks[0]
+            
+            # FIXED: Check if fingers are UP (tip should be ABOVE base joints)
+            # For y-coordinates, smaller values are higher on screen
+            index_up = index_tip[1] < index_pip[1] - 10  # Index tip above PIP with threshold
+            middle_down = middle_tip[1] > middle_pip[1] + 10  # Middle tip below PIP
+            
+            # Additional check: index should be significantly extended
+            index_extended = index_tip[1] < index_mcp[1] - 20
+            
+            # Drawing gesture: index up AND middle down
+            is_drawing = index_up and middle_down and index_extended
+            
+            # Optional: Draw hand landmarks on frame for debugging
+            # Uncomment this to see hand skeleton overlay
+            # self.mp_drawing.draw_landmarks(
+            #     frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
+            
+            positions.append((index_tip[0], index_tip[1], is_drawing))
+
+        return positions
+
+    def draw_hand_debug(self, frame, hand_landmarks):
+        """Draw hand landmarks for debugging (optional utility method)"""
+        self.mp_drawing.draw_landmarks(
+            frame, 
+            hand_landmarks, 
+            self.mp_hands.HAND_CONNECTIONS,
+            self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+            self.mp_drawing.DrawingSpec(color=(255, 0, 0), thickness=2)
+        )
 
 class ColorTracker:
     """Track colored objects (e.g., green marker)"""
@@ -746,7 +782,8 @@ def main():
     hand_tracker = HandTracker() if MP_AVAILABLE else None
     color_tracker = ColorTracker()
     
-    prev_point = None
+    # Support up to two pointers for multi-user (per-hand) drawing
+    prev_points = [None, None]
     last_saved_path = None
     last_ai_cartoon = None
     show_help = True
@@ -765,58 +802,102 @@ def main():
         # Create white canvas for final output
         white_canvas = np.full_like(frame, 255)
         
-        # Get drawing position
+        # Get drawing positions (support two pointers in hand mode)
         current_point = None
         is_drawing = False
-        
+        pointers = [None, None]  # up to two (x,y,is_drawing)
+
         if mode == 'hand' and hand_tracker:
-            result = hand_tracker.get_finger_position(frame)
-            if result:
-                x, y, is_drawing = result
-                current_point = (x, y)
+            hand_results = hand_tracker.get_finger_positions(frame)
+            # Define per-hand display colors (hand 0 uses brush_color, hand 1 a secondary color)
+            hand_display_colors = [brush_color, (0, 200, 0)]
+
+            for i in range(min(2, len(hand_results))):  # Process up to 2 hands
+                x, y, drawing = hand_results[i]
+                pointers[i] = (x, y, drawing)
                 
-                # Draw finger tracking indicator
-                color = (0, 255, 0) if is_drawing else (255, 255, 255)
-                cv2.circle(frame, (x, y), 8, color, -1)
-                cv2.circle(frame, (x, y), brush_size + 5, color, 2)
-        
+                # Draw finger tracking indicator for each hand
+                disp_color = hand_display_colors[i] if drawing else (100, 100, 100)
+                
+                # Draw filled circle when drawing, hollow when not
+                if drawing:
+                    cv2.circle(frame, (x, y), 10, disp_color, -1)
+                    cv2.circle(frame, (x, y), 12, (255, 255, 255), 2)
+                    # Show brush preview
+                    cv2.circle(frame, (x, y), brush_size + 5, disp_color, 2)
+                    # Add "DRAWING" label
+                    label = f"Hand {i+1} DRAW"
+                    cv2.putText(frame, label, (x + 15, y - 15),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, disp_color, 2)
+                else:
+                    cv2.circle(frame, (x, y), 8, disp_color, 2)
+                    # Add "IDLE" label
+                    label = f"Hand {i+1}"
+                    cv2.putText(frame, label, (x + 15, y - 15),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
+            
+            # Clear unused pointer slots
+            for i in range(len(hand_results), 2):
+                pointers[i] = None
         else:  # Color tracking mode
             result = color_tracker.get_position(frame)
             if result:
                 current_point = result
                 is_drawing = True  # Always drawing in color mode
-                
+
                 # Draw tracking indicator
                 cv2.circle(frame, current_point, 10, (0, 255, 0), -1)
                 cv2.circle(frame, current_point, brush_size + 5, (255, 255, 255), 2)
         
-        # Handle drawing
-        if current_point and is_drawing:
-            x, y = current_point
+        # Handle drawing for either color tracking (single pointer) or hand multi-pointer
+        if mode == 'hand' and hand_tracker:
+            # Use pointers list for up to 2 hands
+            for i, p in enumerate(pointers):
+                if p and p[2]:
+                    x, y, _ = p
+                    # Check for toolbar interaction
+                    if y <= 100:
+                        prev_points[i] = None
+                        continue
 
-            # Check for toolbar interaction
-            if y <= 100:  # In toolbar area
-                prev_point = None
-            else:
-                # If we're in normal canvas mode, draw freehand strokes
-                if current_mode == "canvas":
-                    if prev_point and prev_point[1] > 100:  # Previous point also in drawing area
-                        smooth_brush_stroke(paint_canvas, prev_point, current_point,
-                                            brush_color, brush_size, erasing)
-                    prev_point = current_point
+                    # Per-hand brush color (hand 0 uses current brush_color)
+                    hand_color = brush_color if i == 0 else (0, 200, 0)
+
+                    if current_mode == "canvas":
+                        if prev_points[i] and prev_points[i][1] > 100:
+                            smooth_brush_stroke(paint_canvas, prev_points[i], (x, y), hand_color, brush_size, erasing)
+                        prev_points[i] = (x, y)
+                    else:
+                        # Shape mode: stamp once per drawing gesture for this hand
+                        center = (w // 2, h // 2 + 50)
+                        size = min(h, w) // 4
+                        if prev_points[i] is None:
+                            # Prefer stamping at pointer location if available and in drawing area
+                            stamp_center = (x, y) if (y > 100) else center
+                            stamp_shape(paint_canvas, current_mode, stamp_center, size, hand_color, erasing)
+                            prev_points[i] = (x, y)
                 else:
-                    # Shape mode: stamp the selected shape onto the paint canvas once when drawing begins
-                    # Use the same center logic as draw_shape_overlay
-                    center = (w // 2, h // 2 + 50)
-                    size = min(h, w) // 4
-
-                    # Only stamp shape once per drawing gesture
-                    if prev_point is None:
-                        # Use helper to stamp; filled shapes will be semi-transparent black
-                        stamp_shape(paint_canvas, current_mode, center, size, brush_color, erasing)
-                        prev_point = current_point
+                    prev_points[i] = None
         else:
-            prev_point = None
+            # Color tracking / single-pointer mode
+            if current_point and is_drawing:
+                x, y = current_point
+                if y <= 100:
+                    prev_points = [None, None]
+                else:
+                    if current_mode == "canvas":
+                        if prev_points[0] and prev_points[0][1] > 100:
+                            smooth_brush_stroke(paint_canvas, prev_points[0], current_point, brush_color, brush_size, erasing)
+                        prev_points[0] = current_point
+                    else:
+                        center = (w // 2, h // 2 + 50)
+                        size = min(h, w) // 4
+                        if prev_points[0] is None:
+                            stamp_center = current_point if (y > 100) else center
+                            stamp_shape(paint_canvas, current_mode, stamp_center, size, brush_color, erasing)
+                            prev_points[0] = current_point
+            else:
+                prev_points = [None, None]
         
         # Create final frame
         output_frame = overlay_paint_on_canvas(white_canvas, paint_canvas)
@@ -838,8 +919,15 @@ def main():
         if show_help:
             draw_help_panel(output_frame)
         # Add this after the drawing logic and before cv2.imshow
-# Draw pointer on canvas
-        draw_canvas_pointer(output_frame, current_point, brush_size, brush_color, is_drawing)
+        # Draw pointer(s) on canvas
+        if mode == 'hand' and hand_tracker:
+            for i, p in enumerate(pointers):
+                if p:
+                    px, py, pd = p
+                    hand_color = brush_color if i == 0 else (0, 200, 0)
+                    draw_canvas_pointer(output_frame, (px, py), brush_size, hand_color, pd)
+        else:
+            draw_canvas_pointer(output_frame, current_point, brush_size, brush_color, is_drawing)
         if show_shape:
             output_frame = draw_shape_overlay(output_frame, shapes[current_shape_idx], alpha=0.4)
 
